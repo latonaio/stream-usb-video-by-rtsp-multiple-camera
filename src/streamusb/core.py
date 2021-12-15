@@ -2,12 +2,14 @@
 
 # Copyright (c) 2019-2020 Latona. All rights reserved.
 
+from asyncio import sleep
+import logging
 from multiprocessing import Process
-from time import sleep
+
+from custom_logger import init_logger
+from rabbitmq_client import RabbitmqClient
 
 import gi
-from aion.logger import lprint
-from aion.microservice import main_decorator, Options
 
 gi.require_version('Gst', '1.0')  # noqa
 gi.require_version('GstRtspServer', '1.0')  # noqa
@@ -18,6 +20,7 @@ Gst.init(None)
 # Gst.debug_set_active(True)
 # Gst.debug_set_default_threshold(4)
 
+
 DEFAULT_WIDTH = 864
 DEFAULT_HEIGHT = 480
 DEFAULT_FPS = 10
@@ -27,6 +30,13 @@ DEFAULT_URI = "/usb"
 SERVICE_NAME = "stream-usb-video-by-rtsp-multiple-camera"
 SUFFIX = os.environ.get('SUFFIX', '')
 SERVICE_NAME = SERVICE_NAME + '-' + SUFFIX if SUFFIX else SERVICE_NAME
+
+RABBITMQ_URL = os.environ.get("RABBITMQ_URL")
+QUEUE_ORIGIN = os.environ.get("QUEUE_ORIGIN")
+QUEUE_TO = os.environ.get("QUEUE_TO")
+
+
+logger = logging.getLogger(__name__)
 
 
 def get_pipeline(width, height, fps):
@@ -64,12 +74,12 @@ class GstServer:
         self.stop()
 
     def client_connected(self, server, client):
-        lprint(f'[RTSP] next service is connected')
+        logger.info(f'[RTSP] next service is connected')
 
     def on_media_constructed(self, factory, media):
         # get camera path
         if self.device_path is None:
-            lprint("[RTSP] device is not connected")
+            logger.info("[RTSP] device is not connected")
             self.stop()
             return
         # get element state and check state
@@ -80,10 +90,10 @@ class GstServer:
         self.pipe.set_state(Gst.State.PLAYING)
         ret, _, _ = self.pipe.get_state(Gst.CLOCK_TIME_NONE)
         if ret == Gst.StateChangeReturn.FAILURE:
-            lprint("[RTSP] cant connect to device: " + self.device_path)
+            logger.info("[RTSP] cant connect to device: " + self.device_path)
             self.stop()
         else:
-            lprint(f"[RTSP] connect to device ({self.device_path})")
+            logger.info(f"[RTSP] connect to device ({self.device_path})")
 
     def set_device_path(self, device_path):
         self.device_path = device_path
@@ -106,7 +116,7 @@ class DeviceData:
 
         self.process = Process(target=self.server.start)
         self.process.start()
-        lprint(f"[RTSP] ready at rtsp://{self.addr}")
+        logger.info(f"[RTSP] ready at rtsp://{self.addr}")
 
     def get_serial(self):
         return self.serial
@@ -132,7 +142,7 @@ class DeviceDataList:
         metadata_list = []
         # start device list
         for serial, path in device_list.items():
-            lprint(f"Get device data (serial: {serial}, path: {path})")
+            logger.info(f"Get device data (serial: {serial}, path: {path})")
             # set device path
             if self.device_data_list.get(serial):
                 self.device_data_list[serial].set_device_path(path)
@@ -151,7 +161,7 @@ class DeviceDataList:
             output_num = len(self.previous_device_list)
             device_data = DeviceData(serial, path, output_num, width, height, fps, is_docker, num)
 
-            lprint(self.previous_device_list, output_num)
+            logger.info("%s %s", self.previous_device_list, output_num)
 
             metadata = {
                 "width": width,
@@ -167,37 +177,52 @@ class DeviceDataList:
             data.stop()
 
 
-@main_decorator(SERVICE_NAME)
-def main(opt: Options):
-    conn = opt.get_conn()
-    num = opt.get_number()
+async def main():
+    init_logger()
+
+    client = await RabbitmqClient.create(
+        RABBITMQ_URL,
+        [QUEUE_ORIGIN],
+        [QUEUE_TO]
+    )
 
     scale = os.environ.get("SCALE")
     scale = 2 if not isinstance(scale, int) or scale <= 0 else scale
     debug = os.environ.get("DEBUG")
     device = DeviceDataList()
 
+    is_docker = True
+
     # for debug
     if debug:
-        conn.set_kanban(SERVICE_NAME, num)
-        device.start_rtsp_server({"test": "/dev/video0"}, scale, opt.is_docker(), 1)
+        device.start_rtsp_server({"test": "/dev/video0"}, scale, is_docker, 1)
         while True:
             sleep(5)
 
     try:
-        for kanban in conn.get_kanban_itr(SERVICE_NAME, num):
-            device_list = kanban.get_metadata().get("device_list")
-            if not device_list:
-                continue
-            metadata_list = device.start_rtsp_server(device_list, scale, opt.is_docker(), num)
-            for metadata, num in metadata_list:
-                lprint(metadata, num)
-                conn.output_kanban(
-                    metadata={
-                        "type": "start",
-                        "rtsp": metadata,
-                    },
-                    process_number=num,
-                )
+        async for message in client.iterator():
+            try:
+                async with message.process():
+                    device_list = message.data.get("device_list")
+                    if not device_list:
+                        continue
+                    metadata_list = device.start_rtsp_server(device_list, scale, is_docker, 1)
+                    for metadata, num in metadata_list:
+                        logger.info(metadata, num)
+                        await client.send(QUEUE_TO, {
+                            "type": "start",
+                            "rtsp": metadata,
+                        })
+                        # conn.output_kanban(
+                        #     metadata={
+                        #         "type": "start",
+                        #         "rtsp": metadata,
+                        #     },
+                        #     process_number=num,
+                        # )
+
+            except Exception as e:
+                logger.error(e)
+
     finally:
         device.stop_all_device()

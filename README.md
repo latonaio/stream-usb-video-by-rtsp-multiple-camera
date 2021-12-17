@@ -51,7 +51,7 @@ RabbitMQにより、下記のデータを入出力します。
 ## デプロイ on AION
 AION上でデプロイする場合、services.yamlに次の設定を追加してください。
 ```
-  stream-usb-video-by-rtsp-multiple-camera-1:
+  stream-usb-video-by-rtsp-multiple-camera:
     scale: 1
     startup: yes
     always: yes
@@ -64,7 +64,7 @@ AION上でデプロイする場合、services.yamlに次の設定を追加して
         nodePort: 30055
     env:
       SUFFIX: 1
-      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/pokayoke
-      QUEUE_ORIGIN: stream-usb-video-by-rtsp-multiple-camera-1-queue
-      QUEUE_TO: template-matching-by-opencv-for-rtsp-1-queue
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/famanager
+      QUEUE_ORIGIN: stream-usb-video-by-rtsp-multiple-camera-queue
+      QUEUE_TO: template-matching-by-opencv-for-rtsp-queue
 ```

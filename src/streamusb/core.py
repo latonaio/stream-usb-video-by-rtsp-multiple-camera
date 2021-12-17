@@ -28,8 +28,8 @@ DEFAULT_PORT = 8554
 DEFAULT_URI = "/usb"
 
 SERVICE_NAME = "stream-usb-video-by-rtsp-multiple-camera"
-SUFFIX = os.environ.get('SUFFIX', '')
-SERVICE_NAME = SERVICE_NAME + '-' + SUFFIX if SUFFIX else SERVICE_NAME
+SUFFIX = int(os.environ.get('SUFFIX', 0))
+SERVICE_NAME = SERVICE_NAME + '-' + str(SUFFIX) if SUFFIX > 1 else SERVICE_NAME
 
 RABBITMQ_URL = os.environ.get("RABBITMQ_URL")
 QUEUE_ORIGIN = os.environ.get("QUEUE_ORIGIN")
